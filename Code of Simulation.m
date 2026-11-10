@@ -9,7 +9,7 @@ format short g;
 %  Compartments:
 %    V : Healthy natural forest area (ha)
 %    A : Agricultural/plantation land (ha)
-%    F : Active burning area (ha)
+%    F : Active fires area (ha)
 %    R : Degraded land after fire (ha)
 %
 %  Controls:
@@ -18,11 +18,11 @@ format short g;
 %    u3 : Prevention of forest conversion
 %
 %  Scenarios:
-%    Case I   : No control
-%    Case II  : u1 only
-%    Case III : u2 only
-%    Case IV  : u3 only
-%    Case V   : All controls
+%    No control
+%    Case I    : u1 only
+%    Case II   : u2 only
+%    Case III  : u3 only
+%    Case IV   : All controls
 %% ============================================================
 
 
@@ -31,7 +31,7 @@ format short g;
 p.alpha  = 2e-4;
 p.beta1  = 1.5e-5;
 p.beta2  = 2e-5;
-p.gamma  = 0.06;
+p.rho    = 0.06;
 p.kappa1 = 0.10;
 p.omega  = 3e-4;
 p.kappa2 = 1e-3;
@@ -64,7 +64,7 @@ X0 = [500; 300; 50; 150];
 K = sum(X0);
 
 % FBSM settings
-max_iter = 1000;
+max_iter = 300;
 tol      = 1e-7;
 relax    = 0.5;
 
@@ -80,11 +80,11 @@ scenario_keys = {
 };
 
 scenario_names = {
-    'Case I: No control'
-    'Case II: u1 only'
-    'Case III: u2 only'
-    'Case IV: u3 only'
-    'Case V: All controls'
+    'No control'
+    'Case I  : u1 only'
+    'Case II : u2 only'
+    'Case III: u3 only'
+    'Case IV : All controls'
 };
 
 % Columns correspond to u1, u2, and u3
@@ -100,26 +100,26 @@ n_scenarios = numel(scenario_keys);
 
 % Colors for the controlled trajectories in the individual figures
 case_colors = {
-    [0 0 1]       % Case II: blue
-    [0 0.6 0]     % Case III: green
-    [0.7 0 0.7]   % Case IV: magenta
-    [0 0 0]       % Case V: black
+    [0 0 1]       % Case I  : blue
+    [0 0.6 0]     % Case II : green
+    [0.7 0 0.7]   % Case III: magenta
+    [0 0 0]       % Case IV : black
 };
 
 % Line styles for comparisons across all five scenarios
 % IMPORTANT: Define this before using line_styles in any plot.
 line_styles = {
-    'r--'         % Case I: No control
-    'b-'          % Case II: u1 only
-    'g-'          % Case III: u2 only
-    'm-'          % Case IV: u3 only
-    'k-'          % Case V: All controls
+    'r--'         % No control
+    'b-'          % Case I  : u1 only
+    'g-'          % Case II : u2 only
+    'm-'          % Case III: u3 only
+    'k-'          % Case IV : All controls
 };
 
 compartment_names = {
     'Healthy Forest Area V(t)'
     'Agricultural/Plantation Land A(t)'
-    'Active Burning Area F(t)'
+    'Active Fires Area F(t)'
     'Degraded Land R(t)'
 };
 
@@ -272,7 +272,7 @@ end
 
 
 %% 6B. COMBINED CONTROL PROFILES: u1, u2, AND u3
-% Case V: All controls
+% Case IV: All controls
 
 result = scenarios.all_controls;
 
@@ -294,7 +294,7 @@ plot(result.t, result.U(3,:), 'm-', ...
 
 xlabel('Time (days)');
 ylabel('Control Intensity');
-title('Combined Optimal Control Profiles (Case V)');
+title('Combined Optimal Control Profiles');
 
 xlim([t0 tf]);
 ylim([0 1]);
@@ -412,12 +412,12 @@ fprintf('====================================================\n');
 disp(ResultsTable);
 
 
-%% 8. COMPARISON OF ACTIVE BURNING AREA F(t), CASES I-V
+%% 8. COMPARISON OF ACTIVE BURNING AREA F(t), CASES I-IV
 % Five curves in one figure.
 
 figure( ...
     'Color','w', ...
-    'Name','Comparison of Active Burning Area', ...
+    'Name','Comparison of Active fires Area', ...
     'NumberTitle','off');
 
 hold on;
@@ -435,8 +435,8 @@ for s = 1:n_scenarios
 end
 
 xlabel('Time (days)');
-ylabel('Active Burning Area F(t) (ha)');
-title('Comparison of Active Burning Area Across Cases');
+ylabel('Active fires Area F(t) (ha)');
+title('Comparison of Active fires Area Across Cases');
 
 xlim([t0 tf]);
 xticks(0:10:tf);
@@ -448,7 +448,7 @@ box on;
 hold off;
 
 
-%% 9. COMPARISON OF DEGRADED LAND R(t), CASES I-V
+%% 9. COMPARISON OF DEGRADED LAND R(t), CASES I-IV
 % Five curves in one figure.
 
 figure( ...
@@ -486,13 +486,13 @@ hold off;
 
 %% 10. FOUR ADDITIONAL COMBINED COMPARTMENT GRAPHS
 % One figure for each compartment.
-% Each figure compares all five scenarios.
+% Each figure compares all four scenarios.
 %
-% Case I   : Red dashed
-% Case II  : Blue solid
-% Case III : Green solid
-% Case IV  : Magenta solid
-% Case V   : Black solid
+% No Control: Red dashed
+% Case I   : Blue solid
+% Case II  : Green solid
+% Case III : Magenta solid
+% Case IV  : Black solid
 
 for j = 1:4
 
@@ -739,9 +739,9 @@ function dX = state_rhs(X,U,p)
 
     dF = p.beta1*V*F ...
          +p.beta2*A*F ...
-         -(p.gamma+p.kappa1*u1)*F;
+         -(p.rho+p.kappa1*u1)*F;
 
-    dR = (p.gamma+p.kappa1*u1)*F ...
+    dR = (p.rho+p.kappa1*u1)*F ...
          +p.mu*A ...
          -(p.omega+p.kappa2*u2)*R;
 
@@ -785,8 +785,8 @@ function dLam = costate_rhs(X,U,Lam,p)
         +lam1*p.beta1*V ...
         +lam2*p.beta2*A ...
         -lam3*(p.beta1*V+p.beta2*A ...
-               -p.gamma-p.kappa1*u1) ...
-        -lam4*(p.gamma+p.kappa1*u1);
+               -p.rho-p.kappa1*u1) ...
+        -lam4*(p.rho+p.kappa1*u1);
 
     dlam4 = ...
         -p.WR ...
