@@ -1,0 +1,572 @@
+
+%% ================================================================
+%  ONE-AT-A-TIME SENSITIVITY ANALYSIS
+%  Optimal Control Model of Forest and Land Fires
+%  Forward-Backward Sweep Method (FBSM)
+%
+%  Method:
+%  - Classical RK4 for state and costate equations
+%  - FBSM with control projection and relaxation
+%  - OAT perturbation: -20% and +20%
+%  - All three controls are active in the optimal-control scenario
+%% ================================================================
+
+clear;
+clc;
+close all;
+
+fprintf('============================================================\n');
+fprintf('       SENSITIVITY ANALYSIS - KARHUTLA MODEL\n');
+fprintf('============================================================\n\n');
+
+%% 1. BASELINE PARAMETERS
+
+p.alpha  = 2.0e-4;
+p.beta1  = 1.5e-5;
+p.beta2  = 2.0e-5;
+p.rho    = 0.06;
+p.kappa1 = 0.10;
+p.mu     = 2.0e-4;
+p.omega  = 3.0e-4;
+p.kappa2 = 1.0e-3;
+
+% Objective-function weights
+p.WA = 0.5;
+p.WF = 8.0;
+p.WR = 1.5;
+
+% Control-cost coefficients
+p.C1 = 8.0;
+p.C2 = 4.0;
+p.C3 = 5.0;
+
+%% 2. INITIAL CONDITIONS AND TIME GRID
+
+X0 = [500; 300; 50; 150];
+
+K = sum(X0);
+
+t0 = 0;
+tf = 100;
+N  = 501;
+
+t = linspace(t0, tf, N);
+dt = t(2) - t(1);
+
+fprintf('Initial total land area : %.2f ha\n', K);
+fprintf('Simulation period       : %.2f days\n', tf);
+fprintf('Number of time points   : %d\n', N);
+fprintf('Time step               : %.4f days\n\n', dt);
+
+%% 3. FBSM SETTINGS
+
+opt.max_iter = 1000;
+opt.tol = 1.0e-7;
+opt.relax = 0.5;
+
+opt.control_max = 1.0;
+
+%% 4. BASELINE OPTIMAL-CONTROL SIMULATION
+
+fprintf('Running baseline optimal-control simulation...\n');
+
+base = solve_fbsM(p, X0, t, opt);
+
+if ~base.converged
+    warning('Baseline FBSM did not converge.');
+end
+
+Y0 = [base.J, base.BF, base.Vf, base.Rf];
+
+fprintf('\nBASELINE RESULTS\n');
+fprintf('------------------------------------------------------------\n');
+fprintf('Iterations       : %d\n', base.iterations);
+fprintf('Converged        : %d\n', base.converged);
+fprintf('Final residual   : %.12e\n', base.error_control);
+fprintf('Objective J      : %.8f\n', base.J);
+fprintf('Burned area BF   : %.8f ha.day\n', base.BF);
+fprintf('Final V           : %.8f ha\n', base.Vf);
+fprintf('Final R           : %.8f ha\n', base.Rf);
+fprintf('------------------------------------------------------------\n\n');
+
+%% 5. PARAMETERS TO BE TESTED
+
+parameter_names = { ...
+    'alpha', 'beta1', 'beta2', 'rho', ...
+    'kappa1', 'mu', 'omega', 'kappa2', ...
+    'WA', 'WF', 'WR', 'C1', 'C2', 'C3'};
+
+delta = 0.20;
+
+nParam = numel(parameter_names);
+
+% Output order: J, BF, Vf, Rf
+Yminus = zeros(nParam, 4);
+Yplus  = zeros(nParam, 4);
+
+iter_minus = zeros(nParam, 1);
+iter_plus  = zeros(nParam, 1);
+
+res_minus = zeros(nParam, 1);
+res_plus  = zeros(nParam, 1);
+
+conv_minus = false(nParam, 1);
+conv_plus  = false(nParam, 1);
+
+baseline_values = zeros(nParam, 1);
+
+%% 6. ONE-AT-A-TIME SIMULATIONS
+
+for j = 1:nParam
+
+    name = parameter_names{j};
+
+    p0 = p.(name);
+
+    p_minus = p;
+    p_plus  = p;
+
+    % Parameter perturbation
+    p_minus.(name) = (1 - delta) * p0;
+    p_plus.(name)  = (1 + delta) * p0;
+
+    baseline_values(j) = p0;
+
+    fprintf('============================================================\n');
+    fprintf('Parameter %d/%d: %s\n', j, nParam, name);
+    fprintf('Baseline : %.8e\n', p0);
+    fprintf('-20%%     : %.8e\n', p_minus.(name));
+    fprintf('+20%%     : %.8e\n', p_plus.(name));
+    fprintf('============================================================\n');
+
+    %% -20% simulation
+
+    fprintf('Running -20%% simulation...\n');
+
+    sol_minus = solve_fbsM(p_minus, X0, t, opt);
+
+    Yminus(j,:) = [ ...
+        sol_minus.J, ...
+        sol_minus.BF, ...
+        sol_minus.Vf, ...
+        sol_minus.Rf];
+
+    iter_minus(j) = sol_minus.iterations;
+    res_minus(j) = sol_minus.error_control;
+    conv_minus(j) = sol_minus.converged;
+
+    %% +20% simulation
+
+    fprintf('Running +20%% simulation...\n');
+
+    sol_plus = solve_fbsM(p_plus, X0, t, opt);
+
+    Yplus(j,:) = [ ...
+        sol_plus.J, ...
+        sol_plus.BF, ...
+        sol_plus.Vf, ...
+        sol_plus.Rf];
+
+    iter_plus(j) = sol_plus.iterations;
+    res_plus(j) = sol_plus.error_control;
+    conv_plus(j) = sol_plus.converged;
+
+    fprintf('\nResults for %s:\n', name);
+    fprintf('J (-20%%)  = %.8f\n', sol_minus.J);
+    fprintf('J (+20%%)  = %.8f\n', sol_plus.J);
+    fprintf('BF (-20%%) = %.8f\n', sol_minus.BF);
+    fprintf('BF (+20%%) = %.8f\n\n', sol_plus.BF);
+
+    if ~sol_minus.converged || ~sol_plus.converged
+        warning('FBSM did not converge for parameter %s.', name);
+    end
+
+end
+
+%% 7. NORMALIZED SENSITIVITY INDICES
+
+% Central finite-difference approximation:
+%
+% S(Y,p) = [Y(p+) - Y(p-)] / [2*delta*Y(p0)]
+
+S = zeros(nParam, 4);
+
+for j = 1:nParam
+
+    for q = 1:4
+
+        if abs(Y0(q)) > eps
+
+            S(j,q) = ...
+                (Yplus(j,q) - Yminus(j,q)) / ...
+                (2 * delta * Y0(q));
+
+        else
+
+            S(j,q) = NaN;
+
+        end
+
+    end
+
+end
+
+%% 8. CREATE SENSITIVITY TABLE
+
+Parameter = string(parameter_names(:));
+
+T = table( ...
+    Parameter, ...
+    baseline_values, ...
+    Yminus(:,1), Yplus(:,1), S(:,1), ...
+    Yminus(:,2), Yplus(:,2), S(:,2), ...
+    Yminus(:,3), Yplus(:,3), S(:,3), ...
+    Yminus(:,4), Yplus(:,4), S(:,4), ...
+    iter_minus, iter_plus, ...
+    conv_minus, conv_plus, ...
+    'VariableNames', { ...
+    'Parameter', 'Baseline', ...
+    'J_minus', 'J_plus', 'S_J', ...
+    'BF_minus', 'BF_plus', 'S_BF', ...
+    'Vf_minus', 'Vf_plus', 'S_Vf', ...
+    'Rf_minus', 'Rf_plus', 'S_Rf', ...
+    'Iter_minus', 'Iter_plus', ...
+    'Converged_minus', 'Converged_plus'});
+
+fprintf('\n============================================================\n');
+fprintf('             SENSITIVITY ANALYSIS SUMMARY\n');
+fprintf('============================================================\n\n');
+
+disp(T);
+
+%% 9. SAVE RESULTS
+
+writetable(T, 'Sensitivity_Results.csv');
+
+save('Sensitivity_Results.mat', ...
+    'T', 'S', 'Y0', 'Yminus', 'Yplus', ...
+    'base', 'parameter_names', 'delta');
+
+fprintf('\nResults saved successfully:\n');
+fprintf('1. Sensitivity_Results.csv\n');
+fprintf('2. Sensitivity_Results.mat\n');
+
+%% 10. SENSITIVITY PLOTS
+
+output_names = {'J', 'B_F', 'V_f', 'R_f'};
+
+for q = 1:4
+
+    figure('Name', ['Sensitivity - ', output_names{q}]);
+
+    bar(S(:,q));
+
+    set(gca, ...
+        'XTick', 1:nParam, ...
+        'XTickLabel', parameter_names, ...
+        'XTickLabelRotation', 45);
+
+    ylabel('Normalized sensitivity index');
+    xlabel('Model parameters');
+
+    title(['Sensitivity of ', output_names{q}]);
+
+    grid on;
+    yline(0, '--k');
+
+end
+
+fprintf('\nSensitivity analysis completed.\n');
+
+
+%% ================================================================
+%  LOCAL FUNCTION 1: FORWARD-BACKWARD SWEEP METHOD
+%% ================================================================
+
+function result = solve_fbsM(p, X0, t, opt)
+
+    N = numel(t);
+    dt = t(2) - t(1);
+
+    % Initial control guess
+    U = zeros(3, N);
+
+    converged = false;
+    error_control = Inf;
+
+    X = zeros(4, N);
+    L = zeros(4, N);
+
+    for iter = 1:opt.max_iter
+
+        % Forward state integration
+        X = forward_RK4(X0, U, p, dt, N);
+
+        % Backward costate integration
+        L = backward_RK4(X, U, p, dt, N);
+
+        % Calculate updated controls
+        U_new = update_controls(X, L, p, opt.control_max);
+
+        % Relaxation
+        U_relaxed = opt.relax * U_new + ...
+                    (1 - opt.relax) * U;
+
+        % Convergence criterion
+        error_control = max(abs(U_relaxed(:) - U(:)));
+
+        U = U_relaxed;
+
+        if error_control < opt.tol
+            converged = true;
+            break;
+        end
+
+    end
+
+    % Recalculate states and costates using final controls
+    X = forward_RK4(X0, U, p, dt, N);
+    L = backward_RK4(X, U, p, dt, N);
+
+    % Objective functional
+    integrand = ...
+        p.WA * X(2,:) + ...
+        p.WF * X(3,:) + ...
+        p.WR * X(4,:) + ...
+        0.5 * p.C1 * U(1,:).^2 + ...
+        0.5 * p.C2 * U(2,:).^2 + ...
+        0.5 * p.C3 * U(3,:).^2;
+
+    J = trapz(t, integrand);
+
+    % Cumulative burned area
+    BF = trapz(t, X(3,:));
+
+    % Terminal state values
+    Vf = X(1,end);
+    Rf = X(4,end);
+    % Maximum land-area conservation error
+    mass_error = max(abs(sum(X,1) - sum(X0)));
+    result.X = X;
+    result.L = L;
+    result.U = U;
+
+    result.J = J;
+    result.BF = BF;
+    result.Vf = Vf;
+    result.Rf = Rf;
+
+    result.iterations = iter;
+    result.converged = converged;
+    result.error_control = error_control;
+
+end
+
+
+%% ================================================================
+%  LOCAL FUNCTION 2: STATE EQUATIONS
+%% ================================================================
+
+function dX = state_equations(X, U, p)
+
+    V = X(1);
+    A = X(2);
+    F = X(3);
+    R = X(4);
+
+    u1 = U(1);
+    u2 = U(2);
+    u3 = U(3);
+
+    dX = zeros(4,1);
+
+    dX(1) = ...
+        -p.alpha * (1-u3) * V ...
+        -p.beta1 * V * F ...
+        +(p.omega + p.kappa2*u2) * R;
+
+    dX(2) = ...
+        p.alpha * (1-u3) * V ...
+        -p.beta2 * A * F ...
+        -p.mu * A;
+
+    dX(3) = ...
+        p.beta1 * V * F ...
+        +p.beta2 * A * F ...
+        -(p.rho + p.kappa1*u1) * F;
+
+    dX(4) = ...
+        (p.rho + p.kappa1*u1) * F ...
+        +p.mu * A ...
+        -(p.omega + p.kappa2*u2) * R;
+
+end
+
+
+%% ================================================================
+%  LOCAL FUNCTION 3: FORWARD RK4
+%% ================================================================
+
+function X = forward_RK4(X0, U, p, dt, N)
+
+    X = zeros(4,N);
+    X(:,1) = X0;
+
+    for k = 1:N-1
+
+        Uk = U(:,k);
+        Um = 0.5 * (U(:,k) + U(:,k+1));
+        Uk1 = U(:,k+1);
+
+        xk = X(:,k);
+
+        k1 = state_equations(xk, Uk, p);
+
+        k2 = state_equations( ...
+            xk + 0.5*dt*k1, Um, p);
+
+        k3 = state_equations( ...
+            xk + 0.5*dt*k2, Um, p);
+
+        k4 = state_equations( ...
+            xk + dt*k3, Uk1, p);
+
+        X(:,k+1) = xk + ...
+            (dt/6)*(k1 + 2*k2 + 2*k3 + k4);
+
+    end
+
+end
+
+
+%% ================================================================
+%  LOCAL FUNCTION 4: COSTATE EQUATIONS
+%% ================================================================
+
+function dL = costate_equations(X, L, U, p)
+
+    V = X(1);
+    A = X(2);
+    F = X(3);
+    R = X(4);
+
+    l1 = L(1);
+    l2 = L(2);
+    l3 = L(3);
+    l4 = L(4);
+
+    u1 = U(1);
+    u2 = U(2);
+    u3 = U(3);
+
+    % Partial derivatives of the Hamiltonian
+
+    dHdV = ...
+        l1 * (-p.alpha*(1-u3) - p.beta1*F) ...
+        +l2 * p.alpha*(1-u3) ...
+        +l3 * p.beta1*F;
+
+    dHdA = ...
+        p.WA ...
+        +l2 * (-p.beta2*F - p.mu) ...
+        +l3 * p.beta2*F ...
+        +l4 * p.mu;
+
+    dHdF = ...
+        p.WF ...
+        -l1 * p.beta1*V ...
+        -l2 * p.beta2*A ...
+        +l3 * (p.beta1*V + p.beta2*A ...
+        -p.rho - p.kappa1*u1) ...
+        +l4 * (p.rho + p.kappa1*u1);
+
+    dHdR = ...
+        p.WR ...
+        +l1 * (p.omega + p.kappa2*u2) ...
+        -l4 * (p.omega + p.kappa2*u2);
+
+    % Costate equations: dL/dt = -dH/dX
+
+    dL = -[dHdV; dHdA; dHdF; dHdR];
+
+end
+
+
+%% ================================================================
+%  LOCAL FUNCTION 5: BACKWARD RK4
+%% ================================================================
+
+function L = backward_RK4(X, U, p, dt, N)
+
+    L = zeros(4,N);
+
+    % Terminal conditions
+    L(:,N) = zeros(4,1);
+
+    for k = N-1:-1:1
+
+        Xright = X(:,k+1);
+        Xleft  = X(:,k);
+
+        Xmid = 0.5 * (Xleft + Xright);
+
+        Uright = U(:,k+1);
+        Uleft  = U(:,k);
+
+        Umid = 0.5 * (Uleft + Uright);
+
+        Lright = L(:,k+1);
+
+        k1 = costate_equations( ...
+            Xright, Lright, Uright, p);
+
+        k2 = costate_equations( ...
+            Xmid, Lright - 0.5*dt*k1, Umid, p);
+
+        k3 = costate_equations( ...
+            Xmid, Lright - 0.5*dt*k2, Umid, p);
+
+        k4 = costate_equations( ...
+            Xleft, Lright - dt*k3, Uleft, p);
+
+        L(:,k) = Lright - ...
+            (dt/6)*(k1 + 2*k2 + 2*k3 + k4);
+
+    end
+
+end
+
+
+%% ================================================================
+%  LOCAL FUNCTION 6: CONTROL UPDATE
+%% ================================================================
+
+function U_new = update_controls(X, L, p, umax)
+
+    V = X(1,:);
+    F = X(3,:);
+    R = X(4,:);
+
+    l1 = L(1,:);
+    l2 = L(2,:);
+    l3 = L(3,:);
+    l4 = L(4,:);
+
+    U_new = zeros(3,size(X,2));
+
+    % Optimal control u1: fire suppression
+    U_new(1,:) = ...
+        p.kappa1 .* F .* (l3-l4) ./ p.C1;
+
+    % Optimal control u2: rehabilitation
+    U_new(2,:) = ...
+        p.kappa2 .* R .* (l4-l1) ./ p.C2;
+
+    % Optimal control u3: conversion prevention
+    U_new(3,:) = ...
+        p.alpha .* V .* (l2-l1) ./ p.C3;
+
+    % Projection onto the admissible interval [0,1]
+    U_new = max(0, min(umax, U_new));
+
+end
